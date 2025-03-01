@@ -1,0 +1,79 @@
+{
+  "name": "devmind",
+  "displayName": "DevMind",
+  "description": "AI-powered developer news feed in your VS Code status bar",
+  "version": "0.1.0",
+  "publisher": "maniyadv",
+  "icon": "images/logo.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maniyadv/devmind.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "devmind.message",
+        "title": "DevMind: Show Message"
+      },
+      {
+        "command": "devmind.diagnostics",
+        "title": "DevMind: Run Diagnostics"
+      },
+      {
+        "command": "devmind.refreshNews",
+        "title": "DevMind: Refresh News"
+      },
+      {
+        "command": "devmind.nextNews",
+        "title": "DevMind: Show Next News"
+      },
+      {
+        "command": "devmind.previousNews",
+        "title": "DevMind: Show Previous News"
+      },
+      {
+        "command": "devmind.openCurrentNews",
+        "title": "DevMind: Open Current News in Browser"
+      },
+      {
+        "command": "devmind.showAllNews",
+        "title": "DevMind: Show All News"
+      },
+      {
+        "command": "devmind.showNewsPanel",
+        "title": "DevMind: Show News Panel"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "lint": "eslint src --ext ts",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.4",
+    "@types/node": "16.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.1",
+    "@typescript-eslint/parser": "^6.13.1",
+    "@vscode/test-electron": "^2.3.8",
+    "eslint": "^8.54.0",
+    "glob": "^10.3.10",
+    "mocha": "^10.2.0",
+    "typescript": "^5.3.2"
+  }
+}

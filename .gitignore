@@ -1,0 +1,13 @@
+out
+node_modules
+.vscode-test/
+*.vsix
+.DS_Store
+
+# Development and testing files
+scripts/run-diagnostics.sh
+scripts/debug.sh
+scripts/test-*.sh
+*.bak
+src/minimal.ts
+src/ultraminimal.ts
