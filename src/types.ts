@@ -6,6 +6,8 @@ export interface NewsItem {
     score?: number;
     by?: string;
     descendants?: number;
+    excerpt?: string; // Added excerpt field for RSS content
+    thumbnail?: string; // URL to thumbnail image
 }
 
 export interface HackerNewsItem {

@@ -2,376 +2,368 @@ import * as vscode from 'vscode';
 import { NewsItem } from './types';
 
 /**
- * Create a webview panel to display all news items
+ * Create a webview panel to display news
  */
 export function createWebviewPanel(context: vscode.ExtensionContext, newsItems: NewsItem[]): vscode.WebviewPanel {
+    // Create and show panel
     const panel = vscode.window.createWebviewPanel(
         'devmindNews',
         'DevMind News',
-        vscode.ViewColumn.Beside,
+        {
+            viewColumn: vscode.ViewColumn.Beside,
+            preserveFocus: true
+        },
         {
             enableScripts: true,
-            retainContextWhenHidden: true,
             localResourceRoots: [
-                vscode.Uri.joinPath(context.extensionUri, 'media'),
                 vscode.Uri.joinPath(context.extensionUri, 'images')
-            ]
+            ],
+            enableFindWidget: true,
+            retainContextWhenHidden: true,
+            // Trust all content - this prevents the "Configure Trusted Domains" prompt
+            enableCommandUris: true
         }
     );
     
+    // Set panel icon
+    panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'images', 'logo.png');
+    
     try {
-        // Get extension paths
+        // Get path to logo image
         const logoPath = vscode.Uri.joinPath(context.extensionUri, 'images', 'logo.png');
         
-        // Use webview URI for resources
+        // Convert to webview URI
         const logoUri = panel.webview.asWebviewUri(logoPath);
         
         // Create the webview HTML with parsed Markdown and image URI
-        panel.webview.html = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>DevMind News</title>
-            <style>
-                body {
-                    font-family: var(--vscode-font-family);
-                    color: var(--vscode-foreground);
-                    background-color: var(--vscode-editor-background);
-                    padding: 20px;
-                    font-size: var(--vscode-font-size);
-                }
-                .header {
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    margin-bottom: 20px;
-                    border-bottom: 1px solid var(--vscode-panel-border);
-                    padding-bottom: 15px;
-                }
-                .header-left {
-                    display: flex;
-                    align-items: center;
-                }
-                .header img {
-                    height: 40px;
-                    margin-right: 10px;
-                }
-                .header h1 {
-                    margin: 0;
-                    color: var(--vscode-foreground);
-                }
-                .refresh-button {
-                    background-color: var(--vscode-button-background);
-                    color: var(--vscode-button-foreground);
-                    border: none;
-                    padding: 6px 12px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    font-size: 12px;
-                    display: flex;
-                    align-items: center;
-                    gap: 4px;
-                }
-                .refresh-button:hover {
-                    background-color: var(--vscode-button-hoverBackground);
-                }
-                .news-item {
-                    border-bottom: 1px solid var(--vscode-panel-border);
-                    margin-bottom: 20px;
-                    padding-bottom: 20px;
-                }
-                .news-item:last-child {
-                    border-bottom: none;
-                }
-                .news-item h2 {
-                    margin-top: 0;
-                    margin-bottom: 8px;
-                    color: var(--vscode-editor-foreground);
-                }
-                .news-meta {
-                    margin-bottom: 10px;
-                    color: var(--vscode-descriptionForeground);
-                    font-size: 0.9em;
-                }
-                .source-tag {
-                    background-color: var(--vscode-badge-background);
-                    color: var(--vscode-badge-foreground);
-                    padding: 2px 6px;
-                    border-radius: 4px;
-                    font-size: 0.8em;
-                    margin-right: 8px;
-                }
-                .news-item a {
-                    color: var(--vscode-textLink-foreground);
-                    text-decoration: none;
-                }
-                .news-item a:hover {
-                    text-decoration: underline;
-                }
-                .browser-link {
-                    background-color: var(--vscode-button-background);
-                    color: var(--vscode-button-foreground) !important;
-                    padding: 6px 12px;
-                    margin-top: 12px;
-                    display: inline-block;
-                    text-decoration: none;
-                    border-radius: 4px;
-                    font-weight: 500;
-                }
-                .browser-link:hover {
-                    background-color: var(--vscode-button-hoverBackground);
-                    text-decoration: none !important;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <div class="header-left">
-                    <img src="${logoUri}" alt="DevMind Logo">
-                    <h1>DevMind News</h1>
-                </div>
-                <button class="refresh-button" onclick="refreshNews()">
-                    <span style="font-family: codicon;">↻</span> Refresh
-                </button>
-            </div>
-            
-            <div class="news-container">
-                ${newsItems.map((item, index) => {
-                    // Extract domain from URL for display
-                    let domain = '';
-                    try {
-                        const url = new URL(item.url);
-                        domain = url.hostname.replace('www.', '');
-                    } catch (error) {
-                        domain = 'news.ycombinator.com';
-                    }
-                    
-                    return `
-                    <div class="news-item" id="news-${index}">
-                        <h2>${item.title}</h2>
-                        <div class="news-meta">
-                            <span class="source-tag">${item.source}</span>
-                            ${item.by ? `by <strong>${item.by}</strong>` : ''}
-                            ${item.time ? `on <strong>${new Date(item.time * 1000).toLocaleDateString()}</strong>` : ''}
-                            ${item.score ? `with score <strong>${item.score}</strong>` : ''}
-                        </div>
-                        <p>
-                            <a href="${item.url}" class="browser-link">Open in Browser (${domain})</a>
-                        </p>
-                    </div>
-                    `;
-                }).join('')}
-            </div>
-            
-            <script>
-                function refreshNews() {
-                    // Send message to extension to refresh news
-                    const vscode = acquireVsCodeApi();
-                    vscode.postMessage({
-                        command: 'refresh'
-                    });
-                }
-                
-                // Handle messages from the extension
-                window.addEventListener('message', event => {
-                    const message = event.data;
-                    
-                    switch (message.command) {
-                        case 'refreshComplete':
-                            // Refresh was completed, could show a notification or update UI
-                            console.log('News refreshed');
-                            break;
-                    }
-                });
-            </script>
-        </body>
-        </html>
-        `;
+        panel.webview.html = getWebviewContent(panel.webview, newsItems, logoUri);
         
-        // Handle messages from the webview
+        // Handle webview messages
         panel.webview.onDidReceiveMessage(
             message => {
                 switch (message.command) {
                     case 'refresh':
-                        // Refresh the news
-                        vscode.commands.executeCommand('devmind.refreshNews')
-                            .then(() => {
-                                // Send message back to webview that refresh is complete
-                                panel.webview.postMessage({ command: 'refreshComplete' });
-                            });
-                        return;
+                        vscode.commands.executeCommand('devmind.refreshNews');
+                        break;
+                    case 'select':
+                        if (typeof message.index === 'number') {
+                            vscode.commands.executeCommand('devmind.selectNews', message.index);
+                        }
+                        break;
+                    case 'open':
+                        if (message.url) {
+                            vscode.env.openExternal(vscode.Uri.parse(message.url));
+                        }
+                        break;
                 }
             },
             undefined,
             context.subscriptions
         );
-    } catch (error: any) {
-        console.error('Error creating webview panel:', error);
-        panel.webview.html = `
-        <html>
-            <body>
-                <h1>Error loading news</h1>
-                <p>${error.message}</p>
-            </body>
-        </html>
-        `;
+    } catch (error) {
+        console.error('Error creating webview content:', error);
+        panel.webview.html = `<html><body><h1>Error loading content</h1><p>${error instanceof Error ? error.message : String(error)}</p></body></html>`;
     }
     
     return panel;
 }
 
 /**
- * Generate the HTML content for the webview
+ * Get configuration value with fallback
  */
-export function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri, items: NewsItem[]): string {
-    // Get safe URI for icon
-    const iconUri = webview.asWebviewUri(
-        vscode.Uri.joinPath(extensionUri, 'images', 'logo.png')
-    );
+function getConfig<T>(key: string, defaultValue: T): T {
+    const config = vscode.workspace.getConfiguration('devmind');
+    return config.get<T>(key, defaultValue);
+}
 
-    function formatTimeAgo(timestamp: number): string {
-        const seconds = Math.floor((Date.now() / 1000) - timestamp);
-        
-        if (seconds < 60) {
-            return `${seconds}s ago`;
-        }
-        
-        const minutes = Math.floor(seconds / 60);
-        if (minutes < 60) {
-            return `${minutes}m ago`;
-        }
-        
-        const hours = Math.floor(minutes / 60);
-        if (hours < 24) {
-            return `${hours}h ago`;
-        }
-        
-        const days = Math.floor(hours / 24);
-        return `${days}d ago`;
-    }
+function getWebviewContent(webview: vscode.Webview, newsItems: NewsItem[], logoUri: vscode.Uri): string {
+    const newsListHtml = newsItems.map((item, index) => {
+        const thumbnail = item.thumbnail 
+            ? `<div class="news-thumbnail-container">
+                <img class="news-thumbnail" src="${item.thumbnail}" alt="Thumbnail">
+              </div>` 
+            : '';
+            
+        const excerpt = item.excerpt 
+            ? `<div class="news-excerpt">${item.excerpt}</div>` 
+            : '';
+            
+        return `
+            <div class="news-item" data-index="${index}" data-url="${item.url}">
+                <div class="news-labels">
+                    <span class="news-source">${item.source}</span>
+                    <span class="news-date">${formatTimestamp(item.time)}</span>
+                </div>
+                <h3 class="news-title">${item.title}</h3>
+                <div class="news-meta">
+                    ${item.by ? `<span class="news-author">By ${item.by}</span>` : ''}
+                </div>
+                ${thumbnail}
+                ${excerpt}
+                <div class="news-read-more">
+                    <button class="read-more-button">Read More</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    const maxPanelWidth = getConfig<number>('panel.maxWidth', 500);
 
     return `<!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>DevMind News</title>
         <style>
             body {
-                padding: 20px;
-                color: var(--vscode-editor-foreground);
-                background-color: var(--vscode-editor-background);
                 font-family: var(--vscode-font-family);
-                max-width: 800px;
+                padding: 12px;
+                color: var(--vscode-foreground);
+                max-width: ${maxPanelWidth}px;
                 margin: 0 auto;
             }
             .header {
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                margin-bottom: 30px;
-                padding-bottom: 15px;
+                margin-bottom: 12px;
+                padding-bottom: 6px;
                 border-bottom: 1px solid var(--vscode-panel-border);
+            }
+            .header-left {
+                display: flex;
+                align-items: center;
+            }
+            .logo {
+                width: 16px;
+                height: 16px;
+                margin-right: 6px;
             }
             .header h1 {
                 margin: 0;
-                display: flex;
-                align-items: center;
-                font-size: 24px;
-                color: var(--vscode-foreground);
+                font-size: 1em;
+                color: var(--vscode-editor-foreground);
             }
-            .header h1 img {
-                width: 32px;
-                height: 32px;
-                margin-right: 10px;
+            .news-list {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+            .news-item {
+                padding: 10px;
+                border-radius: 4px;
+                background-color: var(--vscode-editor-inactiveSelectionBackground);
+                transition: transform 0.2s ease;
+                cursor: pointer;
+                margin-bottom: 10px;
+                position: relative;
+            }
+            .news-item:hover {
+                transform: translateY(-2px);
+                background-color: var(--vscode-editor-selectionBackground);
+            }
+            .news-item.current {
+                border-left: 3px solid var(--vscode-activityBarBadge-background);
+                background-color: var(--vscode-editor-selectionBackground);
+            }
+            .news-labels {
+                display: flex;
+                justify-content: space-between;
+                margin-bottom: 5px;
+            }
+            .news-source {
+                display: inline-block;
+                padding: 1px 4px;
+                border-radius: 2px;
+                font-size: 0.65em;
+                background-color: var(--vscode-badge-background);
+                color: var(--vscode-badge-foreground);
+            }
+            .news-date {
+                font-size: 0.65em;
+                color: var(--vscode-descriptionForeground);
+            }
+            .news-title {
+                font-size: 0.95em;
+                font-weight: bold;
+                margin-top: 0;
+                margin-bottom: 5px;
+                color: var(--vscode-editor-foreground);
+            }
+            .news-meta {
+                display: flex;
+                justify-content: space-between;
+                font-size: 0.75em;
+                color: var(--vscode-descriptionForeground);
+                margin-bottom: 6px;
+            }
+            .news-author {
+                font-style: italic;
+            }
+            .news-excerpt {
+                margin-top: 6px;
+                font-size: 0.85em;
+                line-height: 1.3;
+                color: var(--vscode-foreground);
+                opacity: 0.9;
+                margin-bottom: 10px;
+            }
+            .news-thumbnail {
+                max-width: 100%;
+                max-height: 150px;
+                margin-bottom: 10px;
+                border-radius: 3px;
+            }
+            .news-thumbnail-container {
+                text-align: center;
+                margin-bottom: 10px;
             }
             .refresh-button {
                 background-color: var(--vscode-button-background);
                 color: var(--vscode-button-foreground);
                 border: none;
-                padding: 8px 16px;
+                padding: 2px 6px;
+                border-radius: 2px;
                 cursor: pointer;
-                border-radius: 4px;
-                font-size: 13px;
-            }
-            .news-item {
-                margin-bottom: 25px;
-                padding: 16px;
-                background-color: var(--vscode-editor-background);
-                border: 1px solid var(--vscode-panel-border);
-                border-radius: 6px;
-                animation: fadeIn 0.5s ease-out;
-            }
-            @keyframes fadeIn {
-                from { opacity: 0; transform: translateY(10px); }
-                to { opacity: 1; transform: translateY(0); }
-            }
-            .news-title {
-                font-size: 16px;
+                font-size: 10px;
                 font-weight: 500;
-                margin-bottom: 10px;
-                cursor: pointer;
-                color: var(--vscode-textLink-foreground);
             }
-            .news-title:hover {
-                text-decoration: underline;
+            .refresh-button:hover {
+                background-color: var(--vscode-button-hoverBackground);
             }
-            .news-meta {
-                font-size: 12px;
-                color: var(--vscode-descriptionForeground);
-                margin-top: 12px;
+            .news-read-more {
+                opacity: 0;
+                position: absolute;
+                right: 10px;
+                bottom: 10px;
+                transition: opacity 0.2s ease;
             }
-            .news-source {
-                font-weight: bold;
+            .news-item:hover .news-read-more {
+                opacity: 1;
             }
-            .open-button {
-                background-color: var(--vscode-button-secondaryBackground);
-                color: var(--vscode-button-secondaryForeground);
+            .read-more-button {
+                background-color: var(--vscode-button-background);
+                color: var(--vscode-button-foreground);
                 border: none;
-                padding: 6px 12px;
+                padding: 2px 5px;
+                border-radius: 2px;
                 cursor: pointer;
-                border-radius: 3px;
-                font-size: 12px;
-                margin-top: 10px;
+                font-size: 0.7em;
+            }
+            .read-more-button:hover {
+                background-color: var(--vscode-button-hoverBackground);
             }
         </style>
     </head>
     <body>
         <div class="header">
-            <h1><img src="${iconUri}" alt="DevMind Logo">DevMind News</h1>
-            <button class="refresh-button" onclick="refreshNews()">Refresh</button>
+            <div class="header-left">
+                <img class="logo" src="${logoUri}" alt="DevMind Logo">
+                <h1>DevMind News</h1>
+            </div>
+            <button class="refresh-button">Refresh</button>
         </div>
-        
-        <div id="news-container">
-            ${items.length === 0 
-              ? '<div>No news items available. Click refresh to try again.</div>' 
-              : items.map((item, index) => `
-                <div class="news-item" style="animation-delay: ${index * 0.1}s">
-                    <div class="news-title" onclick="openUrl('${item.url}')">${item.title}</div>
-                    <div class="news-meta">
-                        <span class="news-source">${item.source}</span> | 
-                        ${item.by ? `<span>${item.by}</span> | ` : ''}
-                        ${item.score ? `<span>${item.score} points</span> | ` : ''}
-                        ${item.descendants ? `<span>${item.descendants} comments</span> | ` : ''}
-                        <span>${formatTimeAgo(item.time)}</span>
-                    </div>
-                    <button class="open-button" onclick="openUrl('${item.url}')">Open in Browser</button>
-                </div>
-              `).join('')}
+        <div class="news-list">
+            ${newsListHtml}
         </div>
-        
+
         <script>
-            const vscode = acquireVsCodeApi();
-            
-            function refreshNews() {
-                vscode.postMessage({ command: 'refresh' });
-            }
-            
-            function openUrl(url) {
-                vscode.postMessage({ command: 'openUrl', url: url });
-            }
+            (function() {
+                const vscode = acquireVsCodeApi();
+                let currentNewsIndex = 0;
+                
+                // Handle refresh button click
+                document.querySelector('.refresh-button').addEventListener('click', () => {
+                    vscode.postMessage({ command: 'refresh' });
+                });
+                
+                // Handle news item clicks
+                document.querySelectorAll('.news-item').forEach(item => {
+                    item.addEventListener('click', (event) => {
+                        // Don't trigger if clicking on the read more button
+                        if (event.target.classList.contains('read-more-button')) {
+                            return;
+                        }
+                        
+                        const index = parseInt(item.dataset.index, 10);
+                        const url = item.dataset.url;
+                        
+                        // If Cmd/Ctrl key is pressed, open in browser
+                        if (event.metaKey || event.ctrlKey) {
+                            vscode.postMessage({ 
+                                command: 'open',
+                                url: url
+                            });
+                        } else {
+                            // Otherwise, select this news item
+                            vscode.postMessage({ 
+                                command: 'select',
+                                index: index
+                            });
+                            
+                            // Update UI to show this item as selected
+                            updateSelectedItem(index);
+                        }
+                    });
+                });
+                
+                // Handle read more button clicks
+                document.querySelectorAll('.read-more-button').forEach(button => {
+                    button.addEventListener('click', (event) => {
+                        event.stopPropagation(); // Prevent item click
+                        const item = button.closest('.news-item');
+                        const url = item.dataset.url;
+                        
+                        vscode.postMessage({ 
+                            command: 'open',
+                            url: url
+                        });
+                    });
+                });
+                
+                // Function to update the selected news item
+                function updateSelectedItem(index) {
+                    // Remove current class from all items
+                    document.querySelectorAll('.news-item').forEach(item => {
+                        item.classList.remove('current');
+                    });
+                    
+                    // Add current class to selected item
+                    const selectedItem = document.querySelector('.news-item[data-index="' + index + '"]');
+                    if (selectedItem) {
+                        selectedItem.classList.add('current');
+                        // Scroll the item into view
+                        selectedItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                    
+                    currentNewsIndex = index;
+                }
+                
+                // Listen for messages from the extension
+                window.addEventListener('message', event => {
+                    const message = event.data;
+                    
+                    switch (message.command) {
+                        case 'updateNews':
+                            // If we receive an update with the current index, highlight that item
+                            if (typeof message.currentIndex === 'number') {
+                                updateSelectedItem(message.currentIndex);
+                            }
+                            break;
+                    }
+                });
+            })();
         </script>
     </body>
     </html>`;
+}
+
+/**
+ * Format Unix timestamp to human-readable date
+ */
+function formatTimestamp(timestamp: number): string {
+    if (!timestamp) return 'Unknown date';
+    const date = new Date(timestamp * 1000);
+    return date.toLocaleString();
 }

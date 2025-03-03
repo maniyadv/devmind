@@ -1,10 +1,8 @@
 import * as vscode from 'vscode';
 import { env } from 'vscode';
-import { HackerNewsService } from './services/hackernews';
-import { GitHubService } from './services/github';
-import { LobstersService } from './services/lobsters';
 import { NewsItem } from './types';
 import { createWebviewPanel } from './webview';
+import { RssService } from './services/rss';
 
 // Global variables
 let statusBarItem: vscode.StatusBarItem;
@@ -12,12 +10,12 @@ let outputChannel: vscode.OutputChannel;
 let newsItems: NewsItem[] = [];
 let currentNewsIndex = 0;
 let rotationInterval: NodeJS.Timeout | undefined;
-let newsService: HackerNewsService;
-let githubService: GitHubService; // Keep the service var but won't use it for now
-let lobstersService: LobstersService; // Add Lobsters service
+let rssService: RssService;
 let panel: vscode.WebviewPanel | undefined;
 let context: vscode.ExtensionContext;
 let hoverDisposable: vscode.Disposable | undefined;
+let lastFetchTime: number = 0;
+const FETCH_INTERVAL = 30 * 60 * 1000; // 30 minutes in milliseconds
 
 /**
  * Format Unix timestamp to human-readable date
@@ -29,419 +27,360 @@ function formatTimestamp(timestamp: number): string {
 }
 
 /**
- * Format tooltip with simplified content
+ * Format tooltip with rich content including excerpt and thumbnail
  */
-function formatRichTooltip(newsItem: NewsItem): string {
-    // Extract domain from URL for display
-    let domain = '';
-    try {
-        const url = new URL(newsItem.url);
-        domain = url.hostname.replace('www.', '');
-    } catch (error) {
-        domain = 'news.ycombinator.com';
+function formatRichTooltip(newsItem: NewsItem): vscode.MarkdownString {
+    // Create a simple markdown string
+    const tooltip = new vscode.MarkdownString();
+    tooltip.isTrusted = true;
+    
+    // Add title
+    tooltip.appendMarkdown(`## ${newsItem.title}\n\n`);
+    
+    // Add excerpt if available (plain text only)
+    if (newsItem.excerpt) {
+        tooltip.appendMarkdown(`${newsItem.excerpt}\n\n`);
     }
     
-    // Create a summary if title is long enough
-    const summary = newsItem.title.length > 60 
-        ? `${newsItem.title.substring(0, 60)}...` 
-        : '';
-        
-    return `# ${newsItem.title}
-${summary ? `\n${summary}\n` : ''}
-
-[$(link-external) Open in Browser (${domain})](${newsItem.url})
-`;
+    // Add metadata
+    tooltip.appendMarkdown(`**Source:** ${newsItem.source}`);
+    if (newsItem.by) {
+        tooltip.appendMarkdown(` by ${newsItem.by}`);
+    }
+    tooltip.appendMarkdown(`\n\n`);
+    
+    // Add instructions
+    tooltip.appendMarkdown(`Click to open news panel | Cmd+Click to open in browser`);
+    
+    return tooltip;
 }
 
 /**
- * Fetch news from all configured sources
+ * Truncate title to specified length
  */
-async function fetchNews() {
+function truncateTitle(title: string, maxLength: number): string {
+    if (!title) {
+        return 'No Title';
+    }
+    
+    // Remove any markdown or HTML that might cause display issues
+    const cleanTitle = title
+        .replace(/\[.*?\]/g, '') // Remove markdown links
+        .replace(/<[^>]*>/g, '') // Remove HTML tags
+        .replace(/&[^;]+;/g, '') // Remove HTML entities
+        .replace(/\s+/g, ' ')    // Normalize whitespace
+        .trim();
+    
+    if (cleanTitle.length <= maxLength) {
+        return cleanTitle;
+    }
+    return cleanTitle.substring(0, maxLength - 3) + '...';
+}
+
+/**
+ * Get configuration value with fallback
+ */
+function getConfig<T>(key: string, defaultValue: T): T {
+    const config = vscode.workspace.getConfiguration('devmind');
+    return config.get<T>(key, defaultValue);
+}
+
+/**
+ * Update the status bar with the current news item
+ */
+function updateStatusBar() {
+    if (newsItems.length === 0) {
+        statusBarItem.text = '$(rss) DevMind News';
+        statusBarItem.tooltip = 'Click to fetch developer news';
+        return;
+    }
+    
+    const currentNews = newsItems[currentNewsIndex];
+    const maxTitleLength = getConfig<number>('statusBar.maxTitleLength', 75);
+    
+    // Update status bar text
+    statusBarItem.text = `$(rss) ${truncateTitle(currentNews.title, maxTitleLength)}`;
+    
+    // Update tooltip with rich content
+    statusBarItem.tooltip = formatRichTooltip(currentNews);
+    
+    // Make sure it's visible
+    statusBarItem.show();
+}
+
+/**
+ * Fetch news from RSS feeds
+ */
+async function fetchNews(): Promise<void> {
+    const now = new Date();
+    
+    // Only fetch if it's been more than FETCH_INTERVAL since the last fetch
+    if (now.getTime() - lastFetchTime < FETCH_INTERVAL && newsItems.length > 0) {
+        // If we have news items and it hasn't been long enough, just shuffle them
+        shuffleNewsItems();
+        updateStatusBar();
+        return;
+    }
+    
     try {
-        statusBarItem.text = '$(sync~spin) Loading news...';
+        statusBarItem.text = '$(loading~spin) DevMind: Fetching news...';
+        statusBarItem.tooltip = 'Fetching latest developer news';
         statusBarItem.show();
         
-        // Log fetching attempt
-        console.log('DevMind: Fetching news from multiple sources...');
-        outputChannel.appendLine('Fetching news from multiple sources...');
-        
-        // Initialize the services if not already done
-        if (!newsService) newsService = new HackerNewsService();
-        if (!githubService) githubService = new GitHubService(); // Keep but won't use for now
-        if (!lobstersService) lobstersService = new LobstersService(); // Add Lobsters service
-        
-        // Fetch from Hacker News and Lobsters
-        const promises = [
-            newsService.getTopStories(8).then(items => items.map(item => ({ ...item, source: 'Hacker News' }))),
-            lobstersService.getHotStories(5).then(items => items.map(item => ({ ...item, source: 'Lobsters' })))
-            // GitHub trending repos removed as requested
-        ];
-        
-        // Wait for all to complete
-        const results = await Promise.allSettled(promises);
-        
-        // Process results
-        let allNewsItems: NewsItem[] = [];
-        
-        results.forEach((result, index) => {
-            if (result.status === 'fulfilled') {
-                const sourceItems = result.value;
-                console.log(`DevMind: Fetched ${sourceItems.length} items from source ${index + 1}`);
-                allNewsItems = [...allNewsItems, ...sourceItems];
-            } else {
-                console.error(`DevMind: Error fetching from source ${index + 1}:`, result.reason);
-                outputChannel.appendLine(`Error fetching from source ${index + 1}: ${result.reason}`);
-            }
-        });
-        
-        // Shuffle the news items to randomize the order
-        allNewsItems = shuffleArray(allNewsItems);
-        
-        // Update global news items
-        newsItems = allNewsItems;
+        const maxItems = getConfig<number>('news.maxItems', 20);
+        newsItems = await rssService.fetchNews(maxItems);
+        lastFetchTime = now.getTime();
         
         if (newsItems.length === 0) {
-            throw new Error('No stories found or invalid response format');
+            statusBarItem.text = '$(rss) DevMind: No news available';
+            statusBarItem.tooltip = 'No news found. Click to try again.';
+            return;
         }
         
-        // Reset to first news item
+        // Reset current index
         currentNewsIndex = 0;
         
         // Update status bar with first news item
-        updateStatusBarWithCurrentNews();
+        updateStatusBar();
         
-        // Update panel if it exists and is visible
-        if (panel && panel.visible) {
-            // Create a temporary panel to get the HTML content
-            const tempPanel = createWebviewPanel(context, newsItems);
-            panel.webview.html = tempPanel.webview.html;
-            // Dispose the temporary panel immediately
-            tempPanel.dispose();
-        }
+        // Update panel if open
+        updatePanel();
         
-        // Log success
-        outputChannel.appendLine(`Fetched ${newsItems.length} news items from multiple sources`);
-        console.log(`DevMind: Fetched ${newsItems.length} news items total`);
+        // Start rotation if not already started
+        startRotation();
+    } catch (error) {
+        console.error('Error fetching news:', error);
+        outputChannel.appendLine(`Error fetching news: ${error instanceof Error ? error.message : String(error)}`);
         
-        return newsItems;
-    } catch (error: any) {
-        console.error('DevMind: Error fetching news:', error);
-        outputChannel.appendLine(`Error fetching news: ${error.message}`);
-        statusBarItem.text = '$(alert) DevMind: Error loading news';
-        statusBarItem.tooltip = `Error: ${error.message}. Click to try again.`;
-        statusBarItem.show();
-        throw error;
+        statusBarItem.text = '$(error) DevMind: Error fetching news';
+        statusBarItem.tooltip = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
 }
 
 /**
- * Shuffle an array using the Fisher-Yates algorithm
+ * Shuffle the news items array
  */
-function shuffleArray<T>(array: T[]): T[] {
-    const newArray = [...array]; // Create a copy to avoid modifying the original
-    for (let i = newArray.length - 1; i > 0; i--) {
+function shuffleNewsItems() {
+    // Fisher-Yates shuffle algorithm
+    for (let i = newsItems.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
-        [newArray[i], newArray[j]] = [newArray[j], newArray[i]]; // Swap elements
+        [newsItems[i], newsItems[j]] = [newsItems[j], newsItems[i]];
     }
-    return newArray;
+    
+    // Reset current index
+    currentNewsIndex = 0;
+    
+    // Update status bar and panel
+    updateStatusBar();
+    updatePanel();
 }
 
 /**
- * Update status bar with current news item
+ * Start news rotation in status bar
  */
-function updateStatusBarWithCurrentNews() {
-    if (newsItems.length === 0) {
-        statusBarItem.text = '$(info) DevMind: No news available';
-        statusBarItem.tooltip = 'Click to fetch news';
-        statusBarItem.command = 'devmind.refreshNews';
-        statusBarItem.show();
+function startRotation() {
+    // Clear existing interval if any
+    if (rotationInterval) {
+        clearInterval(rotationInterval);
+    }
+    
+    // Don't start rotation if we have no news
+    if (newsItems.length <= 1) {
         return;
     }
     
-    const currentNews = newsItems[currentNewsIndex];
+    const refreshInterval = getConfig<number>('statusBar.refreshInterval', 10000);
     
-    try {
-        // Use a fixed minimum width of 75 characters as requested
-        const minWidth = 75;
-        
-        // Truncate title if needed
-        let title = currentNews.title;
-        if (title.length > minWidth) {
-            title = title.substring(0, minWidth - 3) + '...';
-        } else {
-            // Pad to minimum width to ensure consistent display
-            title = title.padEnd(minWidth, ' ');
+    // Set new interval - rotate every refreshInterval milliseconds
+    rotationInterval = setInterval(() => {
+        if (newsItems.length === 0) {
+            return;
         }
         
-        // Update status bar with fixed minimum width
-        statusBarItem.text = `$(rocket) ${title}`;
+        // Move to next news item
+        currentNewsIndex = (currentNewsIndex + 1) % newsItems.length;
         
-        // Create a simple tooltip with basic markdown
-        const tooltip = new vscode.MarkdownString();
-        tooltip.isTrusted = true;
-        tooltip.supportHtml = true;
-        
-        // Title with proper formatting
-        tooltip.appendMarkdown(`## ${currentNews.title}\n\n`);
-        
-        // Source and author info
-        tooltip.appendMarkdown(`**Source:** ${currentNews.source}\n\n`);
-        if (currentNews.by) {
-            tooltip.appendMarkdown(`**By:** ${currentNews.by}\n\n`);
-        }
-        
-        // Separator
-        tooltip.appendMarkdown(`---\n\n`);
-        
-        // Use HTML for better alignment control
-        tooltip.appendMarkdown(`<div style="display: flex; justify-content: space-between; font-size: 15px; margin-top: 12px;">`);
-        tooltip.appendMarkdown(`<div><a href="command:devmind.showNewsPanel"><b>Open Panel</b></a></div>`);
-        tooltip.appendMarkdown(`<div style="text-align: right"><a href="${currentNews.url}"><b>Open in Browser</b></a></div>`);
-        tooltip.appendMarkdown(`</div>`);
-        
-        statusBarItem.tooltip = tooltip;
-        
-        // Set command to open the DevMind panel when clicking on the status bar
-        statusBarItem.command = 'devmind.showNewsPanel';
-        statusBarItem.show();
-    } catch (error: any) {
-        console.error('Error updating status bar:', error);
-        statusBarItem.text = '$(warning) DevMind Error';
-        statusBarItem.tooltip = `Error: ${error.message}`;
-        statusBarItem.show();
-    }
+        // Update status bar
+        updateStatusBar();
+    }, refreshInterval);
 }
 
 /**
- * Start rotating news items
- */
-function startNewsRotation() {
-    // Clear any existing interval
-    if (rotationInterval) {
-        clearInterval(rotationInterval);
-    }
-    
-    // Only start if we have news items
-    if (newsItems.length > 1) {
-        rotationInterval = setInterval(() => {
-            // Move to next news item (with wrapping)
-            currentNewsIndex = (currentNewsIndex + 1) % newsItems.length;
-            updateStatusBarWithCurrentNews();
-        }, 10000); // Rotate every 10 seconds
-    }
-}
-
-/**
- * Stop rotating news items
- */
-function stopNewsRotation() {
-    if (rotationInterval) {
-        clearInterval(rotationInterval);
-        rotationInterval = undefined;
-    }
-}
-
-/**
- * Move to next news item
+ * Show next news item
  */
 function showNextNews() {
-    if (newsItems.length > 1) {
-        currentNewsIndex = (currentNewsIndex + 1) % newsItems.length;
-        updateStatusBarWithCurrentNews();
+    if (newsItems.length === 0) {
+        vscode.window.showInformationMessage('No news available. Try refreshing.');
+        return;
     }
+    
+    // Move to next news item
+    currentNewsIndex = (currentNewsIndex + 1) % newsItems.length;
+    
+    // Update status bar
+    updateStatusBar();
 }
 
 /**
- * Move to previous news item
+ * Show previous news item
  */
 function showPreviousNews() {
-    if (newsItems.length > 1) {
-        currentNewsIndex = (currentNewsIndex - 1 + newsItems.length) % newsItems.length;
-        updateStatusBarWithCurrentNews();
+    if (newsItems.length === 0) {
+        vscode.window.showInformationMessage('No news available. Try refreshing.');
+        return;
     }
+    
+    // Move to previous news item
+    currentNewsIndex = (currentNewsIndex - 1 + newsItems.length) % newsItems.length;
+    
+    // Update status bar
+    updateStatusBar();
 }
 
 /**
- * Open current news item in a panel rather than external browser
- * This helps avoid VS Code security warnings for every new domain
+ * Open current news in browser
  */
 function openCurrentNews() {
     if (newsItems.length === 0) {
-        vscode.window.showWarningMessage('DevMind: No news available. Fetching news...');
-        fetchNews().catch(err => {
-            vscode.window.showErrorMessage(`Failed to fetch news: ${err.message}`);
-        });
+        vscode.window.showInformationMessage('DevMind: No news available');
         return;
     }
     
     const currentNews = newsItems[currentNewsIndex];
+    if (!currentNews.url) {
+        vscode.window.showInformationMessage('DevMind: No URL available for this news item');
+        return;
+    }
     
-    // Open in browser directly
-    env.openExternal(vscode.Uri.parse(currentNews.url));
+    try {
+        vscode.env.openExternal(vscode.Uri.parse(currentNews.url));
+    } catch (error) {
+        outputChannel.appendLine(`Error opening URL: ${error instanceof Error ? error.message : String(error)}`);
+        vscode.window.showErrorMessage(`DevMind: Error opening URL: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
 }
 
 /**
- * Open current news item in browser
+ * Open current news in browser directly (for tooltip button)
  */
 function openCurrentNewsInBrowser() {
+    openCurrentNews();
+}
+
+/**
+ * Show all news items
+ */
+function showAllNews() {
     if (newsItems.length === 0) {
-        vscode.window.showWarningMessage('DevMind: No news available. Fetching news...');
-        fetchNews().catch(err => {
-            vscode.window.showErrorMessage(`Failed to fetch news: ${err.message}`);
-        });
+        vscode.window.showInformationMessage('No news available. Try refreshing.');
         return;
     }
     
-    const currentNews = newsItems[currentNewsIndex];
+    // Create quick pick items
+    const items = newsItems.map((news, index) => {
+        return {
+            label: news.title,
+            description: news.source,
+            detail: news.excerpt || `Published: ${formatTimestamp(news.time)}`,
+            index
+        };
+    });
     
-    // Open in browser directly
-    env.openExternal(vscode.Uri.parse(currentNews.url));
-}
-
-/**
- * Run diagnostics and show results
- */
-async function runDiagnostics() {
-    try {
-        // Create output channel if it doesn't exist
-        if (!outputChannel) {
-            outputChannel = vscode.window.createOutputChannel('DevMind');
-        }
-        
-        // Show and clear output channel
-        outputChannel.clear();
-        outputChannel.show();
-        
-        // Log basic diagnostic info
-        outputChannel.appendLine('===== DevMind Diagnostics =====');
-        outputChannel.appendLine(`Time: ${new Date().toISOString()}`);
-        outputChannel.appendLine(`VS Code Version: ${vscode.version}`);
-        outputChannel.appendLine(`Extension Path: ${vscode.extensions.getExtension('maniyadv.devmind')?.extensionPath}`);
-        
-        // Check if status bar item exists
-        outputChannel.appendLine(`\nStatus Bar:`);
-        outputChannel.appendLine(`- exists: ${statusBarItem ? 'yes' : 'no'}`);
-        if (statusBarItem) {
-            outputChannel.appendLine(`- text: ${statusBarItem.text}`);
-            outputChannel.appendLine(`- tooltip: ${statusBarItem.tooltip}`);
-            outputChannel.appendLine(`- command: ${statusBarItem.command}`);
-            outputChannel.appendLine(`- priority: ${statusBarItem.priority}`);
-        }
-        
-        // Check news items
-        outputChannel.appendLine(`\nNews Items:`);
-        outputChannel.appendLine(`- count: ${newsItems.length}`);
-        outputChannel.appendLine(`- currentIndex: ${currentNewsIndex}`);
-        outputChannel.appendLine(`- rotation active: ${!!rotationInterval}`);
-        
-        // Test news service
-        outputChannel.appendLine(`\nNews Service Test:`);
-        try {
-            outputChannel.appendLine('Testing connection to Hacker News API...');
-            const testItems = await newsService.getTopStories(1);
-            outputChannel.appendLine(`- API reachable: yes (received ${testItems.length} items)`);
-            if (testItems.length > 0) {
-                outputChannel.appendLine(`- Sample item: "${testItems[0].title}"`);
-            }
-        } catch (error: any) {
-            outputChannel.appendLine(`- API reachable: no`);
-            outputChannel.appendLine(`- Error: ${error.message}`);
-        }
-        
-        // Log available commands
-        outputChannel.appendLine(`\nRegistered Commands:`);
-        vscode.commands.getCommands(true).then(commands => {
-            const devmindCommands = commands.filter(cmd => cmd.startsWith('devmind.'));
-            devmindCommands.forEach(cmd => {
-                outputChannel.appendLine(`- ${cmd}`);
-            });
-        });
-        
-        outputChannel.appendLine('\n===== End of Diagnostics =====');
-        
-        // Show success message
-        vscode.window.showInformationMessage('DevMind diagnostics complete. See Output panel for results.');
-        
-    } catch (error: any) {
-        console.error('DevMind: Error running diagnostics:', error);
-        vscode.window.showErrorMessage(`Diagnostics error: ${error.message}`);
-    }
-}
-
-/**
- * Show a simple message
- */
-function showMessage() {
-    vscode.window.showInformationMessage('Hello from DevMind!');
-    console.log('DevMind: Message command executed');
-    
-    // Force a refresh of the status bar
-    if (statusBarItem) {
-        statusBarItem.text = '$(megaphone) DevMind';
-        statusBarItem.show();
-    }
-}
-
-/**
- * Show all news items in Quick Pick
- */
-async function showAllNews() {
-    if (newsItems.length === 0) {
-        vscode.window.showInformationMessage('No news available. Fetching news...');
-        try {
-            await fetchNews();
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`Failed to fetch news: ${error.message}`);
-            return;
-        }
-    }
-    
-    const items = newsItems.map((news, index) => ({
-        label: news.title,
-        description: `Score: ${news.score ?? 'N/A'}`,
-        detail: news.url,
-        index
-    }));
-    
-    const selected = await vscode.window.showQuickPick(items, {
+    // Show quick pick
+    vscode.window.showQuickPick(items, {
         placeHolder: 'Select a news item to open',
         matchOnDescription: true,
         matchOnDetail: true
+    }).then(selected => {
+        if (selected) {
+            // Update current index
+            currentNewsIndex = selected.index;
+            
+            // Update status bar
+            updateStatusBar();
+            
+            // Open in browser
+            openCurrentNews();
+        }
     });
-    
-    if (selected) {
-        currentNewsIndex = selected.index;
-        updateStatusBarWithCurrentNews();
-        openCurrentNews(); // Open in panel instead of browser
+}
+
+/**
+ * Select a specific news item by index
+ */
+function selectNews(index: number) {
+    if (index >= 0 && index < newsItems.length) {
+        currentNewsIndex = index;
+        updateStatusBar();
+        
+        // If panel is open, update it
+        if (panel) {
+            updatePanel();
+        }
     }
 }
 
 /**
- * Show news panel with all current news items
+ * Update the webview panel with current news
+ */
+function updatePanel() {
+    if (panel) {
+        try {
+            // Send the current news index to highlight the item
+            panel.webview.postMessage({ 
+                command: 'updateNews',
+                news: newsItems,
+                currentIndex: currentNewsIndex
+            });
+        } catch (error) {
+            outputChannel.appendLine(`Error updating news panel: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+}
+
+/**
+ * Show news panel
  */
 function showNewsPanel() {
-    if (newsItems.length === 0) {
-        vscode.window.showWarningMessage('DevMind: No news available. Fetching news...');
-        fetchNews().catch(err => {
-            vscode.window.showErrorMessage(`Failed to fetch news: ${err.message}`);
-        });
-        return;
-    }
-    
     try {
-        if (panel) {
-            panel.reveal(vscode.ViewColumn.Beside);
-        } else {
+        if (!panel) {
             panel = createWebviewPanel(context, newsItems);
             
             // Handle panel disposal
             panel.onDidDispose(() => {
                 panel = undefined;
-            }, null, context.subscriptions);
+            });
+            
+            // Handle messages from the webview
+            panel.webview.onDidReceiveMessage(message => {
+                switch (message.command) {
+                    case 'refresh':
+                        fetchNews();
+                        break;
+                    case 'select':
+                        if (typeof message.index === 'number') {
+                            selectNews(message.index);
+                        }
+                        break;
+                    case 'open':
+                        if (message.url) {
+                            vscode.env.openExternal(vscode.Uri.parse(message.url));
+                        }
+                        break;
+                }
+            });
+        } else {
+            panel.reveal(vscode.ViewColumn.Beside, true); // preserveFocus = true to keep it smaller
         }
-    } catch (error: any) {
-        console.error('Error showing news panel:', error);
-        vscode.window.showErrorMessage(`Failed to show news panel: ${error.message}`);
+        
+        // Update panel with current news and highlight the current news item
+        updatePanel();
+        
+        return panel;
+    } catch (error) {
+        outputChannel.appendLine(`Error showing news panel: ${error instanceof Error ? error.message : String(error)}`);
+        vscode.window.showErrorMessage(`DevMind: Error showing news panel: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        return null;
     }
 }
 
@@ -457,67 +396,79 @@ async function showNewsNotification() {
     const currentNews = newsItems[currentNewsIndex];
     
     try {
-        // Create notification message with larger text
-        let message = `$(rocket) ${currentNews.title}`;
-        
-        // Add source and author info
-        let detail = '';
-        if (currentNews.by) {
-            detail = `by ${currentNews.by} • `;
-        }
-        detail += `${currentNews.source}`;
-        
-        // Show notification with action buttons
-        const selection = await vscode.window.showInformationMessage(
-            message,
-            { 
-                modal: false,
-                detail: detail 
-            },
-            { title: 'Open Panel', isCloseAffordance: false },
-            { title: 'Open in Browser', isCloseAffordance: false, iconPath: new vscode.ThemeIcon('link-external') }
+        const selected = await vscode.window.showInformationMessage(
+            currentNews.title,
+            { modal: false, detail: currentNews.excerpt || `From ${currentNews.source}` },
+            'Open in Browser',
+            'Show All',
+            'Next'
         );
         
-        // Handle button clicks
-        if (selection) {
-            if (selection.title === 'Open Panel') {
-                await vscode.commands.executeCommand('devmind.showNewsPanel');
-            } else if (selection.title === 'Open in Browser') {
-                await vscode.commands.executeCommand('devmind.openCurrentNewsInBrowser');
-            }
+        if (selected === 'Open in Browser') {
+            openCurrentNews();
+        } else if (selected === 'Show All') {
+            showAllNews();
+        } else if (selected === 'Next') {
+            showNextNews();
         }
-    } catch (error: any) {
-        console.error('Error showing news notification:', error);
-        vscode.window.showErrorMessage(`Error showing news: ${error.message}`);
+    } catch (error) {
+        console.error('Error showing notification:', error);
     }
 }
 
-export function activate(extensionContext: vscode.ExtensionContext) {
-    console.log('DevMind: Activating...');
-    
+/**
+ * Show a simple message
+ */
+function showMessage() {
+    vscode.window.showInformationMessage('DevMind: Your developer news feed');
+}
+
+/**
+ * Run diagnostics
+ */
+function runDiagnostics() {
+    outputChannel.show();
+    outputChannel.appendLine('=== DevMind Diagnostics ===');
+    outputChannel.appendLine(`Time: ${new Date().toLocaleString()}`);
+    outputChannel.appendLine(`News items: ${newsItems.length}`);
+    outputChannel.appendLine(`Current index: ${currentNewsIndex}`);
+    outputChannel.appendLine(`Last fetch time: ${new Date(lastFetchTime).toLocaleString()}`);
+    outputChannel.appendLine(`Status bar text: ${statusBarItem.text}`);
+    outputChannel.appendLine(`Panel exists: ${!!panel}`);
+    outputChannel.appendLine('=========================');
+}
+
+/**
+ * Activate the extension
+ */
+export function activate(ctx: vscode.ExtensionContext) {
     try {
-        // Store context globally
-        context = extensionContext;
+        // Store context
+        context = ctx;
         
         // Create output channel
         outputChannel = vscode.window.createOutputChannel('DevMind');
-        outputChannel.appendLine('DevMind extension activating...');
         
-        // Initialize services (keep GitHub service initialized but we won't use it)
-        newsService = new HackerNewsService();
-        githubService = new GitHubService();
-        lobstersService = new LobstersService(); // Initialize Lobsters service
+        // Log activation
+        outputChannel.appendLine(`DevMind extension activated at ${new Date().toISOString()}`);
+        
+        // Initialize RSS service
+        rssService = new RssService(outputChannel);
         
         // Create status bar item
         statusBarItem = vscode.window.createStatusBarItem(
             vscode.StatusBarAlignment.Left,
-            1 // Priority 1 to appear last on left side (per memory)
+            1  // Lowest priority to ensure it's the last item on the left
         );
         
         // Set initial text and show immediately
-        statusBarItem.text = '$(rocket) DevMind News';
+        statusBarItem.text = '$(rss) DevMind News';
         statusBarItem.tooltip = 'Click to fetch developer news';
-        statusBarItem.command = 'devmind.refreshNews';
+        statusBarItem.command = {
+            title: 'Show DevMind News',
+            command: 'devmind.statusBarClicked',
+            arguments: []
+        };
         statusBarItem.show();
         
         // Log after creating status bar
@@ -546,7 +497,20 @@ export function activate(extensionContext: vscode.ExtensionContext) {
             vscode.commands.registerCommand('devmind.previousNews', showPreviousNews),
             vscode.commands.registerCommand('devmind.showAllNews', showAllNews),
             vscode.commands.registerCommand('devmind.showNewsPanel', showNewsPanel),
-            vscode.commands.registerCommand('devmind.showNewsNotification', showNewsNotification)
+            vscode.commands.registerCommand('devmind.showNewsNotification', showNewsNotification),
+            vscode.commands.registerCommand('devmind.selectNews', selectNews),
+            vscode.commands.registerCommand('devmind.statusBarClicked', (args) => {
+                // Check if modifier key is pressed (Cmd/Ctrl)
+                const modifierPressed = args && args.modifiers && args.modifiers.includes('ctrlCmd');
+                
+                if (modifierPressed) {
+                    // If Cmd/Ctrl is pressed, open in browser
+                    openCurrentNews();
+                } else {
+                    // Otherwise show the panel
+                    showNewsPanel();
+                }
+            })
         );
         
         // Add important disposables to subscriptions
@@ -560,54 +524,47 @@ export function activate(extensionContext: vscode.ExtensionContext) {
         
         // Force multiple refreshes with increasing delays (from memory)
         setTimeout(() => {
-            statusBarItem.text = '$(rocket) DevMind News';
+            statusBarItem.text = '$(rss) DevMind News Ready';
             statusBarItem.show();
-            console.log('Status bar item should be visible now with text:', statusBarItem.text);
+            
+            // Fetch news after a short delay
+            setTimeout(() => {
+                fetchNews().catch(error => {
+                    console.error('Error in initial news fetch:', error);
+                });
+            }, 2000);
         }, 1000);
         
-        // Fetch news after a short delay to ensure VS Code is fully loaded
-        setTimeout(async () => {
-            try {
-                await fetchNews();
-                startNewsRotation();
-            } catch (error) {
-                console.error('DevMind: Initial news fetch failed:', error);
-                // We already set the error in the status bar in fetchNews
-            }
-        }, 2000);
-        
-        console.log('DevMind: Activated successfully');
         outputChannel.appendLine('DevMind extension activated successfully');
-    } catch (error: any) {
-        console.error('DevMind: Error during activation:', error);
-        vscode.window.showErrorMessage(`DevMind activation error: ${error.message}`);
+    } catch (error) {
+        console.error('Error activating DevMind extension:', error);
+        outputChannel?.appendLine(`Error activating extension: ${error instanceof Error ? error.message : String(error)}`);
+        vscode.window.showErrorMessage(`DevMind: Error activating extension: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 }
 
+/**
+ * Deactivate the extension
+ */
 export function deactivate() {
-    console.log('DevMind: Deactivating...');
-    
-    if (outputChannel) {
-        outputChannel.appendLine('DevMind extension deactivating...');
+    // Clear any intervals
+    if (rotationInterval) {
+        clearInterval(rotationInterval);
+        rotationInterval = undefined;
     }
     
-    // Stop rotation interval
-    stopNewsRotation();
-    
-    // Dispose status bar
-    if (statusBarItem) {
-        statusBarItem.dispose();
+    // Dispose of hover listener
+    if (hoverDisposable) {
+        hoverDisposable.dispose();
     }
     
-    // Dispose output channel
-    if (outputChannel) {
-        outputChannel.dispose();
-    }
-    
-    // Dispose panel if it exists
+    // Close panel if open
     if (panel) {
         panel.dispose();
     }
     
-    console.log('DevMind: Deactivated');
+    // Clear news items
+    newsItems = [];
+    
+    outputChannel?.appendLine('DevMind extension deactivated');
 }

@@ -3,6 +3,9 @@
 # Exit on error
 set -e
 
+echo "🧹 Cleaning output directory..."
+rm -rf ./out
+
 echo "🏗️ Building extension..."
 npm run compile
 

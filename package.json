@@ -2,7 +2,7 @@
   "name": "devmind",
   "displayName": "DevMind",
   "description": "AI-powered developer news feed in your VS Code status bar",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "publisher": "maniyadv",
   "icon": "images/logo.png",
   "repository": {
@@ -52,8 +52,53 @@
       {
         "command": "devmind.showNewsPanel",
         "title": "DevMind: Show News Panel"
+      },
+      {
+        "command": "devmind.showNewsNotification",
+        "title": "DevMind: Show News Notification"
+      },
+      {
+        "command": "devmind.selectNews",
+        "title": "DevMind: Select News Item"
+      },
+      {
+        "command": "devmind.statusBarClicked",
+        "title": "DevMind: Status Bar Clicked"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "DevMind",
+      "properties": {
+        "devmind.statusBar.maxTitleLength": {
+          "type": "integer",
+          "default": 75,
+          "minimum": 20,
+          "maximum": 150,
+          "description": "Maximum length of news title displayed in the status bar"
+        },
+        "devmind.statusBar.refreshInterval": {
+          "type": "integer",
+          "default": 10000,
+          "minimum": 5000,
+          "maximum": 60000,
+          "description": "Interval in milliseconds to rotate news in the status bar"
+        },
+        "devmind.panel.maxWidth": {
+          "type": "integer",
+          "default": 500,
+          "minimum": 300,
+          "maximum": 800,
+          "description": "Maximum width of the news panel in pixels"
+        },
+        "devmind.news.maxItems": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 5,
+          "maximum": 50,
+          "description": "Maximum number of news items to display"
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -75,5 +120,8 @@
     "glob": "^10.3.10",
     "mocha": "^10.2.0",
     "typescript": "^5.3.2"
+  },
+  "dependencies": {
+    "rss-parser": "^3.13.0"
   }
 }
