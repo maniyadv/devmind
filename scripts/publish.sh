@@ -20,12 +20,18 @@ if [ -n "$(git status --porcelain)" ]; then
     exit 1
 fi
 
-echo "🔄 Updating version to $VERSION..."
-npm version $VERSION --no-git-tag-version
-
-# Update version in package.json and create commit
-git add package.json
-git commit -m "chore: bump version to $VERSION"
+# Check if current version matches requested version
+CURRENT_VERSION=$(node -p "require('./package.json').version")
+if [ "$CURRENT_VERSION" != "$VERSION" ]; then
+    echo "🔄 Updating version to $VERSION..."
+    npm version $VERSION --no-git-tag-version
+    
+    # Update version in package.json and create commit
+    git add package.json
+    git commit -m "chore: bump version to $VERSION"
+else
+    echo "✅ Version already set to $VERSION, skipping version update"
+fi
 
 # Build and package
 ./scripts/build.sh
