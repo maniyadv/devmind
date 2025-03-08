@@ -2,7 +2,7 @@
   "name": "devmind",
   "displayName": "DevMind",
   "description": "AI-powered developer news feed in your VS Code status bar",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "maniyadv",
   "icon": "images/logo.png",
   "repository": {
@@ -92,9 +92,9 @@
         },
         "devmind.news.maxItems": {
           "type": "integer",
-          "default": 20,
+          "default": 100,
           "minimum": 5,
-          "maximum": 50,
+          "maximum": 200,
           "description": "Maximum number of news items to display"
         }
       }

@@ -21,6 +21,7 @@ type CustomParser = RssParser<{item: CustomItem}>;
 
 // Define RSS feed sources
 const RSS_FEEDS = [
+    // Original sources
     {
         name: 'TechCrunch',
         url: 'https://techcrunch.com/feed/'
@@ -29,13 +30,58 @@ const RSS_FEEDS = [
         name: 'DEV.to',
         url: 'https://dev.to/feed/'
     },
+    // Additional sources from the recommended list
     {
-        name: 'Hacker Noon',
-        url: 'https://hackernoon.com/feed'
+        name: 'Mashable',
+        url: 'https://mashable.com/feeds/rss/all'
     },
     {
-        name: 'FreeCodeCamp',
-        url: 'https://www.freecodecamp.org/news/rss/'
+        name: 'The Verge',
+        url: 'https://www.theverge.com/rss/index.xml'
+    },
+    {
+        name: 'TNW',
+        url: 'https://thenextweb.com/feed'
+    },
+    {
+        name: 'Engadget',
+        url: 'https://www.engadget.com/rss.xml'
+    },
+    {
+        name: 'Wired',
+        url: 'https://www.wired.com/feed/rss'
+    },
+    {
+        name: 'Ars Technica',
+        url: 'https://feeds.arstechnica.com/arstechnica/index'
+    },
+    {
+        name: 'ZDNet',
+        url: 'https://www.zdnet.com/news/rss.xml'
+    },
+    {
+        name: 'VentureBeat',
+        url: 'https://venturebeat.com/feed/'
+    },
+    {
+        name: 'ReadWrite',
+        url: 'https://readwrite.com/feed/'
+    },
+    {
+        name: 'Gizmodo',
+        url: 'https://gizmodo.com/rss'
+    },
+    {
+        name: 'TechRepublic',
+        url: 'https://www.techrepublic.com/rssfeeds/articles/'
+    },
+    {
+        name: 'TechRadar',
+        url: 'https://www.techradar.com/rss'
+    },
+    {
+        name: '9to5Mac',
+        url: 'https://9to5mac.com/feed/'
     }
 ];
 
@@ -58,7 +104,7 @@ export class RssService {
     /**
      * Fetch news from all RSS feeds
      */
-    async fetchNews(maxItems: number = 20): Promise<NewsItem[]> {
+    async fetchNews(maxItems: number = 100): Promise<NewsItem[]> {
         this.outputChannel.appendLine(`Fetching news from RSS feeds at ${new Date().toLocaleString()}`);
         
         try {
@@ -93,50 +139,54 @@ export class RssService {
         try {
             const feed = await this.parser.parseURL(feedUrl);
             
-            return feed.items.map((item: CustomItem) => {
-                // Extract excerpt from content or description
-                let excerpt = '';
-                if (item.content) {
-                    // Remove HTML tags for plain text excerpt
-                    excerpt = this.stripHtml(item.content).substring(0, 200) + '...';
-                } else if (item.description) {
-                    excerpt = this.stripHtml(item.description).substring(0, 200) + '...';
-                }
-                
-                // Extract thumbnail from media:content, enclosure, or from content
-                let thumbnail = '';
-                
-                // Try to get from media:content
-                if (item['media:content'] && item['media:content'].length > 0) {
-                    const mediaContent = item['media:content'].find(media => 
-                        media.$ && media.$.medium === 'image' && media.$.url
-                    );
-                    if (mediaContent && mediaContent.$ && mediaContent.$.url) {
-                        thumbnail = mediaContent.$.url;
+            // Process all items, regardless of whether they have thumbnails
+            const allItems = feed.items
+                .map((item: CustomItem) => {
+                    // Extract excerpt from content or description
+                    let excerpt = '';
+                    if (item.content) {
+                        // Remove HTML tags for plain text excerpt
+                        excerpt = this.stripHtml(item.content).substring(0, 200) + '...';
+                    } else if (item.description) {
+                        excerpt = this.stripHtml(item.description).substring(0, 200) + '...';
                     }
-                }
-                
-                // If no thumbnail yet, try enclosure
-                if (!thumbnail && item.enclosure && item.enclosure.url && 
-                    item.enclosure.type && item.enclosure.type.startsWith('image/')) {
-                    thumbnail = item.enclosure.url;
-                }
-                
-                // If still no thumbnail, try to extract first image from content or description
-                if (!thumbnail) {
-                    thumbnail = this.extractFirstImageUrl(item.content || item.description || '');
-                }
-                
-                return {
-                    title: item.title || 'Untitled',
-                    url: item.link || '',
-                    source: sourceName,
-                    time: item.isoDate ? new Date(item.isoDate).getTime() / 1000 : Date.now() / 1000,
-                    excerpt: excerpt,
-                    by: item.creator || item.author || 'Unknown',
-                    thumbnail: thumbnail
-                } as NewsItem;
-            });
+                    
+                    // Extract thumbnail from media:content, enclosure, or from content
+                    let thumbnail = '';
+                    
+                    // Try to get from media:content
+                    if (item['media:content'] && item['media:content'].length > 0) {
+                        const mediaContent = item['media:content'].find(media => 
+                            media.$ && media.$.medium === 'image' && media.$.url
+                        );
+                        if (mediaContent && mediaContent.$ && mediaContent.$.url) {
+                            thumbnail = mediaContent.$.url;
+                        }
+                    }
+                    
+                    // If no thumbnail yet, try enclosure
+                    if (!thumbnail && item.enclosure && item.enclosure.url && 
+                        item.enclosure.type && item.enclosure.type.startsWith('image/')) {
+                        thumbnail = item.enclosure.url;
+                    }
+                    
+                    // If still no thumbnail, try to extract first image from content or description
+                    if (!thumbnail) {
+                        thumbnail = this.extractFirstImageUrl(item.content || item.description || '');
+                    }
+                    
+                    return {
+                        title: item.title || 'Untitled',
+                        url: item.link || '',
+                        source: sourceName,
+                        time: item.isoDate ? new Date(item.isoDate).getTime() / 1000 : Date.now() / 1000,
+                        excerpt: excerpt,
+                        by: item.creator || item.author || 'Unknown',
+                        thumbnail: thumbnail
+                    } as NewsItem;
+                });
+            
+            return allItems;
         } catch (error) {
             this.outputChannel.appendLine(`Error fetching from ${sourceName}: ${error instanceof Error ? error.message : String(error)}`);
             return [];
@@ -171,16 +221,24 @@ export class RssService {
     }
     
     /**
-     * Shuffle array and limit to specified count
+     * Sort, prioritize news with images, and limit to specified count
      */
-    private shuffleAndLimit<T>(array: T[], limit: number): T[] {
-        // Fisher-Yates shuffle
-        for (let i = array.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [array[i], array[j]] = [array[j], array[i]];
-        }
+    private shuffleAndLimit<T extends NewsItem>(array: T[], limit: number): T[] {
+        // First sort by time (newest first)
+        const sortedByTime = [...array].sort((a, b) => (b.time || 0) - (a.time || 0));
+        
+        // Separate items with and without thumbnails
+        const withThumbnails = sortedByTime.filter(item => item.thumbnail);
+        const withoutThumbnails = sortedByTime.filter(item => !item.thumbnail);
+        
+        // Shuffle both arrays to mix up sources
+        this.shuffleArray(withThumbnails);
+        this.shuffleArray(withoutThumbnails);
+        
+        // Combine arrays, with thumbnails first
+        const combined = [...withThumbnails, ...withoutThumbnails];
         
         // Limit to specified count
-        return array.slice(0, limit);
+        return combined.slice(0, limit);
     }
 }

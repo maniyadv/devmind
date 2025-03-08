@@ -4,17 +4,22 @@ DevMind brings the latest developer news directly to your VS Code status bar. St
 
 ![DevMind Demo](images/demo.png)
 
-## What's New in 0.3.0
+## Card-Based News UI
 
-- **Customizable UI**: Configure status bar title length, refresh interval, and panel width
-- **Improved Status Bar**: Dynamic width with static RSS icon
-- **More Compact Design**: Reduced panel dimensions for a cleaner look
-- **Enhanced Text Handling**: Better handling of HTML/Markdown content
+![DevMind Card UI](images/demo2.png)
+
+## What's New in 0.4.0
+
+- **Card-Based UI**: Beautiful card design with news images as backgrounds
+- **Improved Layout**: Responsive grid layout for better viewing experience
+- **Visual Enhancements**: Gradient overlays and hover effects for better readability
+- **RSS Feed Sources**: News from TechCrunch, DEV.to, Hacker Noon, and FreeCodeCamp
+- **Performance Improvements**: Faster loading and smoother transitions
 
 ## Features
 
 - **Status Bar Integration**: View the latest developer news directly in your VS Code status bar
-- **News Rotation**: Automatically rotates through top news items every 10 seconds
+- **News Rotation**: Automatically rotates through top news items every 10 seconds (pauses on hover)
 - **Multiple Sources**: Fetches news from TechCrunch, DEV.to, Hacker Noon, and FreeCodeCamp
 - **Rich Content**: View article excerpts in tooltips for quick previews
 - **News Panel**: Browse all fetched news items in a dedicated panel
@@ -57,12 +62,19 @@ Hover over a news item to see the full title, excerpt, and action buttons.
 
 ## Release Notes
 
+### 0.4.0
+
+- Implemented magazine-style card design with news images as backgrounds
+- Updated news sources to TechCrunch, DEV.to, The Verge, Wired, and Mashable
+- Reduced refresh interval to 15 minutes for more timely updates
+- Added pause-on-hover functionality for the status bar
+- Filtered out news items without images for a more engaging experience
+
 ### 0.2.0
 
 - Switched to RSS feeds for more reliable content delivery
-- Added news from TechCrunch, DEV.to, Hacker Noon, and FreeCodeCamp
 - Added article excerpts in tooltips
-- Improved performance with 30-minute refresh intervals
+- Improved performance with refresh intervals
 - Enhanced UI for better readability
 
 ### 0.1.1

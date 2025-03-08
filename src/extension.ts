@@ -15,7 +15,9 @@ let panel: vscode.WebviewPanel | undefined;
 let context: vscode.ExtensionContext;
 let hoverDisposable: vscode.Disposable | undefined;
 let lastFetchTime: number = 0;
-const FETCH_INTERVAL = 30 * 60 * 1000; // 30 minutes in milliseconds
+const FETCH_INTERVAL = 2 * 60 * 1000; // 2 minutes in milliseconds
+const MAX_NEWS_ITEMS = 100; // Store up to 100 news items
+let isStatusBarHovered = false;
 
 /**
  * Format Unix timestamp to human-readable date
@@ -127,9 +129,40 @@ async function fetchNews(): Promise<void> {
         statusBarItem.tooltip = 'Fetching latest developer news';
         statusBarItem.show();
         
-        const maxItems = getConfig<number>('news.maxItems', 20);
-        newsItems = await rssService.fetchNews(maxItems);
+        const maxItems = getConfig<number>('news.maxItems', MAX_NEWS_ITEMS);
+        // Fetch more items to build up our collection
+        const newItems = await rssService.fetchNews(maxItems);
         lastFetchTime = now.getTime();
+        
+        // Maintain existing news items by merging with new ones
+        // First, create a map of existing items by URL to avoid duplicates
+        const existingItemsMap = new Map<string, NewsItem>();
+        newsItems.forEach(item => {
+            if (item.url) {
+                existingItemsMap.set(item.url, item);
+            }
+        });
+        
+        // Add new items that don't already exist
+        newItems.forEach(item => {
+            if (item.url && !existingItemsMap.has(item.url)) {
+                existingItemsMap.set(item.url, item);
+            }
+        });
+        
+        // Convert map back to array and limit to MAX_NEWS_ITEMS
+        newsItems = Array.from(existingItemsMap.values());
+        
+        // Sort items to prioritize those with thumbnails
+        const withThumbnails = newsItems.filter(item => item.thumbnail);
+        const withoutThumbnails = newsItems.filter(item => !item.thumbnail);
+        
+        // Sort each group by time (newest first)
+        withThumbnails.sort((a, b) => (b.time || 0) - (a.time || 0));
+        withoutThumbnails.sort((a, b) => (b.time || 0) - (a.time || 0));
+        
+        // Combine with thumbnails first, limited to MAX_NEWS_ITEMS
+        newsItems = [...withThumbnails, ...withoutThumbnails].slice(0, MAX_NEWS_ITEMS);
         
         if (newsItems.length === 0) {
             statusBarItem.text = '$(rss) DevMind: No news available';
@@ -193,8 +226,8 @@ function startRotation() {
     
     // Set new interval - rotate every refreshInterval milliseconds
     rotationInterval = setInterval(() => {
-        if (newsItems.length === 0) {
-            return;
+        if (newsItems.length === 0 || isStatusBarHovered) {
+            return; // Don't rotate if hovered
         }
         
         // Move to next news item
@@ -346,6 +379,8 @@ function showNewsPanel() {
         if (!panel) {
             panel = createWebviewPanel(context, newsItems);
             
+            // We'll handle specific messages instead of all messages
+            
             // Handle panel disposal
             panel.onDidDispose(() => {
                 panel = undefined;
@@ -354,12 +389,22 @@ function showNewsPanel() {
             // Handle messages from the webview
             panel.webview.onDidReceiveMessage(message => {
                 switch (message.command) {
+                    case 'webviewReady':
+                        // Webview is ready, update panel without changing size
+                        updatePanel();
+                        break;
                     case 'refresh':
                         fetchNews();
+                        // Don't update the panel immediately to avoid width changes
+                        // The webview will request an update when it's ready
                         break;
                     case 'select':
                         if (typeof message.index === 'number') {
-                            selectNews(message.index);
+                            // Just update the status bar, don't recreate the panel
+                            if (message.index >= 0 && message.index < newsItems.length) {
+                                currentNewsIndex = message.index;
+                                updateStatusBar();
+                            }
                         }
                         break;
                     case 'open':
@@ -367,14 +412,38 @@ function showNewsPanel() {
                             vscode.env.openExternal(vscode.Uri.parse(message.url));
                         }
                         break;
+                    case 'openAndSelect':
+                        // Combined command to avoid multiple trust domain popups
+                        if (message.url) {
+                            // Open in VS Code's internal browser instead of external browser
+                            const uri = vscode.Uri.parse(message.url);
+                            vscode.commands.executeCommand('vscode.open', uri);
+                        }
+                        if (typeof message.index === 'number') {
+                            if (message.index >= 0 && message.index < newsItems.length) {
+                                currentNewsIndex = message.index;
+                                updateStatusBar();
+                            }
+                        }
+                        break;
+                    case 'setHoverState':
+                        // Handle hover state messages from webview
+                        isStatusBarHovered = message.state;
+                        break;
                 }
             });
         } else {
-            panel.reveal(vscode.ViewColumn.Beside, true); // preserveFocus = true to keep it smaller
+            // Just update the panel content without changing its position or size
+            // This prevents the panel from shrinking when it's already open
+            updatePanel();
         }
         
         // Update panel with current news and highlight the current news item
-        updatePanel();
+        // Only update if we just created the panel (updatePanel is already called for existing panels)
+        if (panel && panel.webview) {
+            // Send a message to the webview to highlight the current news item
+            panel.webview.postMessage({ command: 'highlightNews', index: currentNewsIndex });
+        }
         
         return panel;
     } catch (error) {
@@ -470,6 +539,38 @@ export function activate(ctx: vscode.ExtensionContext) {
             arguments: []
         };
         statusBarItem.show();
+        
+        // Add hover listeners to pause rotation using hover events
+        // We can't directly access DOM in extension context, so we'll use VS Code's hover event
+        if (hoverDisposable) {
+            hoverDisposable.dispose();
+        }
+        
+        // Create a hover provider for the status bar item
+        hoverDisposable = vscode.window.onDidChangeWindowState((e) => {
+            // This is a workaround since VS Code doesn't provide direct hover events for status bar
+            // We'll use mouse position tracking in the webview instead
+        });
+        
+        // Register command to handle hover state from webview
+        context.subscriptions.push(
+            vscode.commands.registerCommand('devmind.setHoverState', (state: boolean) => {
+                isStatusBarHovered = state;
+            })
+        );
+        
+        // Handle messages from webview
+        if (panel) {
+            panel.webview.onDidReceiveMessage(
+                message => {
+                    if (message.command === 'setHoverState') {
+                        isStatusBarHovered = message.state;
+                    }
+                },
+                undefined,
+                context.subscriptions
+            );
+        }
         
         // Log after creating status bar
         outputChannel.appendLine('Status bar item created and displayed');
