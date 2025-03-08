@@ -2,7 +2,7 @@
   "name": "devmind",
   "displayName": "DevMind",
   "description": "AI-powered developer news feed in your VS Code status bar",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "maniyadv",
   "icon": "images/logo.png",
   "repository": {
