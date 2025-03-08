@@ -4,9 +4,9 @@ DevMind brings the latest developer news directly to your VS Code status bar. St
 
 ![DevMind Demo](images/demo.png)
 
-## Card-Based News UI
+## News UI in Panel
 
-![DevMind Card UI](images/demo2.png)
+<img src="images/demo2.png" alt="DevMind Card UI" style="max-height: 575px;" />
 
 ## What's New in 0.4.0
 
